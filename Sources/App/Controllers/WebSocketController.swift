@@ -9,57 +9,86 @@ import Vapor
 // Создаем контроллер для обработки WebSocket соединений
 final class WebSocketController: RouteCollection {
 
+    private var wsClients: [String: WebSocket] = [:]
+
     func boot(routes: RoutesBuilder) throws {
-        // Обработчик для веб-сокета
         routes.webSocket("socket", onUpgrade: handleSocketUpgrade)
     }
 
-    // Метод для обработки обновления соединения до WebSocket
     func handleSocketUpgrade(req: Request, ws: WebSocket) {
-        print("ПОДКЛЮЧЕНИЕ")
+        Logger.log(message: "Подключение")
 
-        // Отправляем клиенту сообщение о успешном подключении
         ws.send("Вы успешно подключились")
 
-        // Обработчик для получения сообщений от клиента
-        ws.onText { ws, text in
-            guard let data = text.data(using: .utf8) else { return }
-            do {
-                let msg = try JSONDecoder().decode(Message.self, from: data)
+        ws.onText { [weak self] ws, text in
+            guard let self, let data = text.data(using: .utf8) else {
+                Logger.log(kind: .error, message: "Неверный привод типа `text.data(using: .utf8)`")
+                return
+            }
 
-                switch msg.event {
-                case "connection":
-                    print("here")
-                    self.connectionHandler(ws: ws, msg: msg)
-                case "message":
-                    print(msg)
-                default:
-                    break
+            do {
+                let msgKind = try JSONDecoder().decode(MessageAbstract.self, from: data)
+
+                switch msgKind.kind {
+                case .connection:
+                    let msg = try JSONDecoder().decode(Message.self, from: data)
+                    wsClients[msg.userName] = ws
+                    let stringMessage = "Пользователь с ником: \(msg.userName) добавлен в сессию"
+                    Logger.log(message: stringMessage)
+                    ws.send(stringMessage)
+
+                case .message:
+                    let msg = try JSONDecoder().decode(Message.self, from: data)
+                    Logger.log(message: msg)
+                    wsClients.values.forEach {
+                        $0.send(text)
+                    }
                 }
+
             } catch {
-                print("Ошибка при декодировании сообщения: \(error)")
+                Logger.log(kind: .error, message: error)
             }
         }
 
-        // Обработчик закрытия соединения
-        ws.onClose.whenComplete { _ in
-            print("Отключение")
+        ws.onClose.whenComplete { [weak self] _ in
+            guard let self, let key = wsClients.first(where: { $0.value === ws })?.key else { return }
+            wsClients.removeValue(forKey: key)
+            Logger.log(message: "Пользователь с ником: \(key) удалён из очереди")
         }
-    }
-
-    // Обработчик подключения
-    func connectionHandler(ws: WebSocket, msg: Message) {
-        print(msg)
-
-        // Отправляем сообщение всем клиентам
-        let response = "Пользователь с \(msg.userName) подключён"
-        ws.send(response)
     }
 }
 
-// Структура для представления JSON сообщения
-struct Message: Content {
-    let event: String
-    let id: Int
+// MARK: - Models
+
+enum MessageKind: String, Decodable {
+    case connection
+    case message
+}
+
+struct MessageAbstract: Decodable {
+    let kind: MessageKind
+}
+
+struct Message: Decodable {
     let userName: String
+    let dispatchDate: Date
+    let message: String
+}
+
+// MARK: - Logger
+
+final class Logger {
+    private init() {}
+
+    static func log(kind: Kind = .info, message: Any, function: String = #function) {
+        print("[ \(kind.rawValue.uppercased()) ]: [ \(Date()) ]: [ \(function) ]")
+        print(message)
+        print()
+    }
+
+    enum Kind: String, Hashable {
+        case info
+        case error
+        case warning
+    }
 }
