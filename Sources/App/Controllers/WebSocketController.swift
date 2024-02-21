@@ -38,10 +38,24 @@ final class WebSocketController: RouteCollection {
                     ws.send(stringMessage)
 
                 case .message:
-                    let msg = try JSONDecoder().decode(Message.self, from: data)
-                    Logger.log(message: msg)
-                    wsClients.values.forEach {
-                        $0.send(text)
+                    var msg = try JSONDecoder().decode(Message.self, from: data)
+                    msg.state = [.error, .received].randomElement()!
+                    let jsonData = try JSONEncoder().encode(msg)
+                    guard let jsonString = String(data: jsonData, encoding: .utf8) else {
+                        Logger.log(kind: .error, message: "Ошибка преобразование jsonData: [ \(msg) ] к jsonString")
+                        return
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        // Если обнаружена ошибка, сообщаем только пользователю
+                        switch msg.state {
+                        case .error:
+                            ws.send(jsonString)
+                        default:
+                            self.wsClients.values.forEach {
+                                Logger.log(kind: .message, message: msg)
+                                $0.send(jsonString)
+                            }
+                        }
                     }
                 }
 
@@ -60,19 +74,28 @@ final class WebSocketController: RouteCollection {
 
 // MARK: - Models
 
-enum MessageKind: String, Decodable {
+enum MessageKind: String, Codable {
     case connection
     case message
 }
 
-struct MessageAbstract: Decodable {
+struct MessageAbstract: Codable {
     let kind: MessageKind
 }
 
-struct Message: Decodable {
+struct Message: Codable {
+    var id: UUID
+    let kind: MessageKind
     let userName: String
     let dispatchDate: Date
     let message: String
+    var state: State
+}
+
+enum State: String, Codable {
+    case progress
+    case received
+    case error
 }
 
 // MARK: - Logger
@@ -90,5 +113,6 @@ final class Logger {
         case info
         case error
         case warning
+        case message
     }
 }
