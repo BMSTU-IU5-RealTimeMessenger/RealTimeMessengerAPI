@@ -33,13 +33,13 @@ final class WebSocketController: RouteCollection {
                 case .connection:
                     let msg = try JSONDecoder().decode(Message.self, from: data)
                     wsClients[msg.userName] = ws
-                    let stringMessage = "Пользователь с ником: \(msg.userName) добавлен в сессию"
-                    Logger.log(message: stringMessage)
+                    let stringMessage = "Пользователь с ником: [ \(msg.userName) ] добавлен в сессию"
+                    Logger.log(kind: .connection, message: stringMessage)
                     ws.send(stringMessage)
 
                 case .message:
                     var msg = try JSONDecoder().decode(Message.self, from: data)
-                    msg.state = [.error, .received].randomElement()!
+                    msg.state = [.error, .received, .received].randomElement()!
                     let jsonData = try JSONEncoder().encode(msg)
                     guard let jsonString = String(data: jsonData, encoding: .utf8) else {
                         Logger.log(kind: .error, message: "Ошибка преобразование jsonData: [ \(msg) ] к jsonString")
@@ -67,7 +67,7 @@ final class WebSocketController: RouteCollection {
         ws.onClose.whenComplete { [weak self] _ in
             guard let self, let key = wsClients.first(where: { $0.value === ws })?.key else { return }
             wsClients.removeValue(forKey: key)
-            Logger.log(message: "Пользователь с ником: \(key) удалён из очереди")
+            Logger.log(kind: .close, message: "Пользователь с ником: [ \(key) ] удалён из очереди")
         }
     }
 }
@@ -114,5 +114,7 @@ final class Logger {
         case error
         case warning
         case message
+        case close
+        case connection
     }
 }
