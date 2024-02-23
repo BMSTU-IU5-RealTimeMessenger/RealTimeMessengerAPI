@@ -7,6 +7,4 @@ public func configure(_ app: Application) async throws {
 
     // register routes
     try routes(app)
-
-    try app.register(collection: WebSocketController())
 }

@@ -1,38 +1,40 @@
 //
 //  WebSocketController.swift
+//  RealTimeMessengerAPI
 //
 //  Created by Dmitriy Permyakov on 19.02.2024.
 //
 
 import Vapor
 
-// MARK: - Client
-
-struct Client: Hashable {
-    var ws: WebSocket
-    var userName: String
-}
-
-extension Client {
-
-    static func == (lhs: Client, rhs: Client) -> Bool {
-        lhs.userName == rhs.userName
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(userName)
-    }
-}
-
 // MARK: - WebSocketController
 
 final class WebSocketController: RouteCollection {
 
+    // MARK: Private Values
+
     private var wsClients: Set<Client> = Set()
 
+    // MARK: Router
+
     func boot(routes: RoutesBuilder) throws {
+
+        // Groups
+        let apiGroup = routes.grouped("api", "v1")
+        let messageGroup = apiGroup.grouped("message")
+
+        // HTTP
+        messageGroup.post(use: handleMessageFromExternalService)
+        messageGroup.post("proxy", use: proxyExternalService)
+
+        // WebSocket
         routes.webSocket("socket", onUpgrade: handleSocketUpgrade)
     }
+}
+
+// MARK: - Web Sockets
+
+private extension WebSocketController {
 
     func handleSocketUpgrade(req: Request, ws: WebSocket) {
         Logger.log(message: "Подключение")
@@ -51,7 +53,8 @@ final class WebSocketController: RouteCollection {
                     try connectionHandler(ws: ws, data: data)
 
                 case .message:
-                    try messageHandler(ws: ws, data: data)
+//                    try messageHandler(ws: ws, data: data)
+                    try messageHandlerWithService(ws: ws, data: data)
 
                 case .close:
                     break
@@ -91,6 +94,7 @@ final class WebSocketController: RouteCollection {
         }
     }
 
+    @available(*, deprecated, renamed: "messageHandlerWithService", message: "Этот метод устарел. Теперь используется http сервис")
     func messageHandler(ws: WebSocket, data: Data) throws {
         var msg = try JSONDecoder().decode(Message.self, from: data)
         msg.state = [.error, .received, .received].randomElement()!
@@ -110,11 +114,24 @@ final class WebSocketController: RouteCollection {
         }
     }
 
+    func messageHandlerWithService(ws: WebSocket, data: Data) throws {
+        let msg = try JSONDecoder().decode(Message.self, from: data)
+        sendMessageToExternalService(message: msg) { result in
+            switch result {
+            case .success:
+                Logger.log(kind: .info, message: "Сообщение успешно доставленно на сервис транспортного уровня")
+            case let .failure(error):
+                Logger.log(kind: .error, message: error.localizedDescription)
+            }
+        }
+    }
+
     func closeHandler(ws: WebSocket, key: String) throws {
         guard let deletedClient = wsClients.remove(Client(ws: ws, userName: key)) else {
             Logger.log(kind: .error, message: "Не удалось удалить пользователя: [ \(key) ]")
             return
         }
+
         Logger.log(kind: .close, message: "Пользователь с ником: [ \(deletedClient.userName) ] удалён из очереди")
         let msgConnection = Message(
             id: UUID(),
@@ -131,74 +148,87 @@ final class WebSocketController: RouteCollection {
     }
 }
 
-// MARK: - Message Extenstion
+// MARK: - HTTP
 
-extension Message {
+private extension WebSocketController {
 
-    func encodeMessage() throws -> String {
-        let msgData = try JSONEncoder().encode(self)
-        guard let msgString = String(data: msgData, encoding: .utf8) else {
-            throw KingError.dataToString
+    func handleMessageFromExternalService(_ req: Request) async throws -> ServerResponse {
+        let httpMessage = try req.content.decode(HttpMessage.self)
+        guard let uid = UUID(uuidString: httpMessage.uid) else {
+            throw Abort(.custom(code: HTTPResponseStatus.badRequest.code, 
+                                reasonPhrase: "UUID не корректен"))
         }
-        return msgString
-    }
-}
-
-enum KingError: Error {
-    case dataToString
-
-    var localizedDescription: String {
-        switch self {
-        case .dataToString:
-            return "Не получилось закодировать Data в строку"
+        guard let ws = wsClients.first(where: { $0.userName == httpMessage.userName }) else {
+            throw Abort(.custom(code: HTTPResponseStatus.internalServerError.code, 
+                                reasonPhrase: "Пользователь: \(httpMessage.userName) не найден в сессии"))
         }
-    }
-}
 
-// MARK: - Models
+        // FIXME: Заменить на код Никиты, когда сервис транспортного уровня будет добавлен
+        let msgState: MessageState = httpMessage.errorCode == "200" ? .received : .error
+        let msg = Message(
+            id: uid,
+            kind: .message,
+            userName: httpMessage.userName,
+            dispatchDate: Date(),
+            message: httpMessage.message,
+            state: msgState
+        )
+        let msgString = try msg.encodeMessage()
+        switch msg.state {
+        case .error:
+            try await ws.ws.send(msgString)
+        default:
+            wsClients.forEach {
+                $0.ws.send(msgString)
+            }
+        }
 
-enum MessageKind: String, Codable {
-    case connection
-    case close
-    case message
-}
-
-struct MessageAbstract: Codable {
-    let kind: MessageKind
-}
-
-struct Message: Codable {
-    var id: UUID
-    let kind: MessageKind
-    let userName: String
-    let dispatchDate: Date
-    let message: String
-    var state: State
-}
-
-enum State: String, Codable {
-    case progress
-    case received
-    case error
-}
-
-// MARK: - Logger
-
-final class Logger {
-    private init() {}
-
-    static func log(kind: Kind = .info, message: Any, function: String = #function) {
-        print("[ \(kind.rawValue.uppercased()) ]: [ \(Date()) ]: [ \(function) ]")
-        print(message)
-        print()
+        return ServerResponse(
+            status: HTTPResponseStatus.ok.code,
+            description: "Пользователь: \(httpMessage.userName) получил сообщение: \(httpMessage.message)"
+        )
     }
 
-    enum Kind: String {
-        case info
-        case error
-        case warning
-        case message
-        case close
-        case connection
+    func sendMessageToExternalService(message: Message, completion: @escaping MKResultBlock<Bool, KingError>) {
+        let uidString = message.id.uuidString
+        let httpMessage = HttpMessage(
+            uid: uidString,
+            message: message.message,
+            userName: message.userName,
+            errorCode: nil
+        )
+        let msgData: Data
+        do {
+            msgData = try httpMessage.encodeMessage()
+        } catch {
+            completion(.failure(.error(error)))
+            return
+        }
+
+        // FIXME: Заменить на URL Влада
+        let externalServiceURL = "http://127.0.0.1:8080/api/v1/message/proxy"
+        APIManager.shared.post(urlString: externalServiceURL, msgData: msgData, completion: completion)
+    }
+    
+    /// Ручка, имитирующая работу сервиса Влада на трансортном уровне.
+    func proxyExternalService(_ req: Request) async throws -> String {
+        let msg = try req.content.decode(HttpMessage.self)
+        Logger.log(message: "Имитация работы сервиса транспортного уровня. Полученно сообщение: \(msg)")
+        sleep(1)
+        let errorCode = ["200", "300"].randomElement()!
+        let msgWithErrorStatus = HttpMessage(uid: msg.uid, message: msg.message, userName: msg.userName, errorCode: errorCode)
+        let msgData: Data = try msgWithErrorStatus.encodeMessage()
+        APIManager.shared.post(
+            urlString: "http://127.0.0.1:8080/api/v1/message",
+            msgData: msgData
+        ) { result in
+            switch result {
+            case .success:
+                Logger.log(message: "Успешно отправлены данные назад")
+            case let .failure(error):
+                Logger.log(kind: .error, message: error.localizedDescription)
+            }
+        }
+        return "Закончил отправку"
     }
 }

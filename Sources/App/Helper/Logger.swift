@@ -1,6 +1,6 @@
 //
 //  Logger.swift
-//  
+//  RealTimeMessengerAPI
 //
 //  Created by Dmitriy Permyakov on 22.02.2024.
 //
