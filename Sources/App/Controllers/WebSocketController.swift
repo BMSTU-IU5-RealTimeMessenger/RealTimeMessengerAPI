@@ -138,7 +138,7 @@ private extension WebSocketController {
             kind: .close,
             userName: key,
             dispatchDate: Date(),
-            message: "",
+            message: .clear,
             state: .received
         )
         let msgConnectionString = try msgConnection.encodeMessage()
@@ -178,8 +178,10 @@ private extension WebSocketController {
         case .error:
             try await ws.ws.send(msgString)
         default:
-            wsClients.forEach {
-                $0.ws.send(msgString)
+            wsClients.forEach { client in
+                if client.userName != msg.userName {
+                    client.ws.send(msgString)
+                }
             }
         }
 
