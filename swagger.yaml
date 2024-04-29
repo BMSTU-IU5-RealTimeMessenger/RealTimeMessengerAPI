@@ -1,0 +1,74 @@
+openapi: 3.0.0
+info:
+  title: Message Handling API
+  description: API for handling messages from external services
+  version: 1.0.0
+
+servers:
+  - url: http://127.0.0.1:8080/api/v1
+    description: Production server
+
+paths:
+  /message:
+    post:
+      summary: Handle message from external service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                uid:
+                  type: string
+                  format: uuid
+                userName:
+                  type: string
+                errorCode:
+                  type: string
+                message:
+                  type: string
+              required:
+                - uid
+                - userName
+                - message
+      responses:
+        '200':
+          description: |
+            Message processed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                    example: 200
+                  description: |
+                    User: exampleUser received the message: Hello, world!
+        '400':
+          description: |
+            Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                    example: 400
+                  description: |
+                    UUID is not correct
+        '500':
+          description: |
+            Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                    example: 500
+                  description: |
+                    User: exampleUser not found in session

@@ -6,13 +6,14 @@
 //
 
 import Foundation
+import SwiftPrettyPrint
 
 final class Logger {
     private init() {}
 
     static func log(kind: Kind = .info, message: Any, function: String = #function) {
         print("[ \(kind.rawValue.uppercased()) ]: [ \(Date()) ]: [ \(function) ]")
-        print(message)
+        Pretty.prettyPrint(message)
         print()
     }
 
