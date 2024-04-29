@@ -5,6 +5,7 @@
 //  Created by Dmitriy Permyakov on 23.02.2024.
 //
 
+import Foundation
 import Vapor
 
 struct MessageAbstract: Codable {
@@ -17,25 +18,12 @@ struct Message: Codable {
     let userName: String
     let dispatchDate: Date
     let message: String
-    var state: MessageState
-}
-
-struct HttpMessage: Content, Codable {
-    let uid: String
-    let message: String
-    let userName: String
-    let errorCode: String?
 }
 
 enum MessageKind: String, Codable {
     case connection
     case close
     case message
-}
-
-enum MessageState: String, Codable {
-    case progress
-    case received
     case error
 }
 
