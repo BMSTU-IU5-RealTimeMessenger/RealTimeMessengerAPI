@@ -18,11 +18,11 @@ final class Logger {
     }
 
     enum Kind: String {
-        case info
-        case error
-        case warning
-        case message
-        case close
-        case connection
+        case info = "ℹ️ info"
+        case error = "⛔️ error"
+        case warning = "⚠️ warning"
+        case message = "💬 message"
+        case close = "❌ close"
+        case connection = "✅ open"
     }
 }

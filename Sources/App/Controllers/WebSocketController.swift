@@ -25,7 +25,7 @@ final class WebSocketController: RouteCollection {
 
         // HTTP
         messageGroup.post(use: handleMessageFromExternalService)
-        messageGroup.post("proxy", use: proxyExternalService)
+//        messageGroup.post("proxy", use: proxyExternalService)
 
         // WebSocket
         routes.webSocket("socket", onUpgrade: handleSocketUpgrade)
@@ -60,6 +60,9 @@ private extension WebSocketController {
 
                 case .error:
                     break
+
+                case .notification:
+                    break
                 }
 
             } catch {
@@ -92,8 +95,13 @@ private extension WebSocketController {
         )
         let msgConnectionString = try msgConnection.encodeMessage()
         Logger.log(kind: .connection, message: "Пользователь с ником: [ \(msg.userName) ] добавлен в сессию")
-        wsClients.forEach {
-            $0.ws.send(msgConnectionString)
+        sendMessageToExternalService(message: msg) { result in
+            switch result {
+            case .success:
+                Logger.log(kind: .info, message: "Сообщение успешно доставленно на сервис транспортного уровня")
+            case let .failure(error):
+                Logger.log(kind: .error, message: error.localizedDescription)
+            }
         }
     }
 
@@ -136,15 +144,8 @@ private extension WebSocketController {
 
     /// Get message from application layer to transport layer
     func handleMessageFromExternalService(_ req: Request) async throws -> ServerResponse {
-        let httpMessage = try req.content.decode(HttpMessage.self)
-
-        // Если `message data` пустая, значит данные повредились
-        guard let messageData = httpMessage.data else {
-            // Если ошибка тоже пустая, выбрасываем ошибку
-            guard let _ = httpMessage.error else {
-                throw Abort(.custom(code: HTTPResponseStatus.badRequest.code,
-                                    reasonPhrase: "message data and error is nil. error info"))
-            }
+        let httpMessageWithString = try req.content.decode(HttpMessage.self)
+        if let error = httpMessageWithString.error {
             let msg = Message(
                 id: UUID(),
                 kind: .error,
@@ -153,17 +154,24 @@ private extension WebSocketController {
                 message: .clear
             )
             let msgString = try msg.encodeMessage()
-
             // Отправляем всем клиентом текст об ошибке отправки сообщения
             wsClients.forEach { client in
                 client.ws.send(msgString)
             }
-
             return ServerResponse(
                 status: HTTPResponseStatus.ok.code,
-                description: "Данные об ошибке отправлены пользователю"
+                description: "сообщили челам про ошибку: \(error)"
             )
         }
+
+        guard let objectString = httpMessageWithString.data?.data(using: .utf8) else {
+            throw Abort(.custom(
+                code: HTTPResponseStatus.badRequest.code,
+                reasonPhrase: "объект `data` не может быть nil, если error уже не nil"
+            ))
+        }
+
+        let messageData = try JSONDecoder().decode(HttpMessageData.self, from: objectString)
 
         guard let uid = UUID(uuidString: messageData.uid) else {
             throw Abort(.custom(code: HTTPResponseStatus.badRequest.code,
@@ -172,7 +180,7 @@ private extension WebSocketController {
 
         let msg = Message(
             id: uid,
-            kind: .message,
+            kind: messageData.messageKind,
             userName: messageData.userName,
             dispatchDate: Date(),
             message: messageData.message
@@ -196,6 +204,7 @@ private extension WebSocketController {
         let messageData = HttpMessageData(
             uid: message.id.uuidString,
             message: message.message,
+            messageKind: message.kind,
             userName: message.userName
         )
 
@@ -209,44 +218,45 @@ private extension WebSocketController {
         }
 
         // FIXME: Заменить на URL Влада
-        let externalServiceURL = "http://127.0.0.1:8080/api/v1/message/proxy"
+//        let externalServiceURL = "http://127.0.0.1:8080/api/v1/message/proxy"
+        let externalServiceURL = "http://192.168.175.118:16000/send"
         APIManager.shared.post(urlString: externalServiceURL, msgData: msgData, completion: completion)
     }
     
     /// Ручка, имитирующая работу сервиса Влада на трансортном уровне.
-    func proxyExternalService(_ req: Request) async throws -> String {
-        let httpMessageData = try req.content.decode(HttpMessageData.self)
-        Logger.log(message: "Имитация работы сервиса транспортного уровня. Полученно сообщение: \(httpMessageData)")
-        let hasError = [false, true].randomElement()!
-
-        let httpMsg: HttpMessage
-        // Формируем сообщение с ошибков
-        if hasError {
-            Logger.log(kind: .info, message: "Данные повреждены в фейковом сервисе")
-            httpMsg = HttpMessage(data: nil, error: "Данные повреждены")
-        } else {
-            httpMsg = HttpMessage(
-                data: .init(
-                    uid: httpMessageData.uid,
-                    message: httpMessageData.message,
-                    userName: httpMessageData.userName
-                ),
-                error: nil
-            )
-        }
-
-        let encodedMsgData: Data = try JSONEncoder().encode(httpMsg)
-        APIManager.shared.post(
-            urlString: "http://127.0.0.1:8080/api/v1/message",
-            msgData: encodedMsgData
-        ) { result in
-            switch result {
-            case .success:
-                Logger.log(message: "Успешно отправлены данные назад")
-            case let .failure(error):
-                Logger.log(kind: .error, message: error.localizedDescription)
-            }
-        }
-        return "Закончил отправку"
-    }
+//    func proxyExternalService(_ req: Request) async throws -> String {
+//        let httpMessageData = try req.content.decode(HttpMessageData.self)
+//        Logger.log(message: "Имитация работы сервиса транспортного уровня. Полученно сообщение: \(httpMessageData)")
+//        let hasError = [false, true].randomElement()!
+//
+//        let httpMsg: HttpMessage
+//        // Формируем сообщение с ошибков
+//        if hasError {
+//            Logger.log(kind: .info, message: "Данные повреждены в фейковом сервисе")
+//            httpMsg = HttpMessage(data: nil, error: "Данные повреждены")
+//        } else {
+//            httpMsg = HttpMessage(
+//                data: .init(
+//                    uid: httpMessageData.uid,
+//                    message: httpMessageData.message,
+//                    userName: httpMessageData.userName
+//                ),
+//                error: nil
+//            )
+//        }
+//
+//        let encodedMsgData: Data = try JSONEncoder().encode(httpMsg)
+//        APIManager.shared.post(
+//            urlString: "http://127.0.0.1:8080/api/v1/message",
+//            msgData: encodedMsgData
+//        ) { result in
+//            switch result {
+//            case .success:
+//                Logger.log(message: "Успешно отправлены данные назад")
+//            case let .failure(error):
+//                Logger.log(kind: .error, message: error.localizedDescription)
+//            }
+//        }
+//        return "Закончил отправку"
+//    }
 }

@@ -9,12 +9,13 @@ import Foundation
 import Vapor
 
 struct HttpMessage: Content, Codable {
-    let data: HttpMessageData?
+    let data: String?
     let error: String?
 }
 
 struct HttpMessageData: Content, Codable {
     let uid: String
     let message: String
+    let messageKind: MessageKind
     let userName: String
 }

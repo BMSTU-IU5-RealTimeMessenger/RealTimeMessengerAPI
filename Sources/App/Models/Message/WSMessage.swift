@@ -25,6 +25,7 @@ enum MessageKind: String, Codable {
     case close
     case message
     case error
+    case notification
 }
 
 // MARK: - Encode
