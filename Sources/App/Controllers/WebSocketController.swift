@@ -60,9 +60,6 @@ private extension WebSocketController {
 
                 case .error:
                     break
-
-                case .notification:
-                    break
                 }
 
             } catch {
