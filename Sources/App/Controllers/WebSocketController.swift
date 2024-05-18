@@ -25,7 +25,7 @@ final class WebSocketController: RouteCollection {
 
         // HTTP
         messageGroup.post(use: handleMessageFromExternalService)
-//        messageGroup.post("proxy", use: proxyExternalService)
+        messageGroup.post("proxy", use: proxyExternalService)
 
         // WebSocket
         routes.webSocket("socket", onUpgrade: handleSocketUpgrade)
@@ -84,16 +84,12 @@ private extension WebSocketController {
 
     func connectionHandler(ws: WebSocket, data: Data) throws {
         let msg = try JSONDecoder().decode(Message.self, from: data)
+        if (wsClients.first(where: { $0.userName == msg.userName }) != nil) {
+            Logger.log(kind: .error, message: "Имя пользователя занято")
+            throw Abort(.custom(code: HTTPResponseStatus.badRequest.code, reasonPhrase: "Имя пользователя занято"))
+        }
         let newClient = Client(ws: ws, userName: msg.userName)
         wsClients.insert(newClient)
-        let msgConnection = Message(
-            id: UUID(),
-            kind: .connection,
-            userName: msg.userName,
-            dispatchDate: Date(),
-            message: .clear
-        )
-        let msgConnectionString = try msgConnection.encodeMessage()
         Logger.log(kind: .connection, message: "Пользователь с ником: [ \(msg.userName) ] добавлен в сессию")
         sendMessageToExternalService(message: msg) { result in
             switch result {
@@ -124,16 +120,20 @@ private extension WebSocketController {
         }
 
         Logger.log(kind: .close, message: "Пользователь с ником: [ \(deletedClient.userName) ] удалён из очереди")
-        let msgConnection = Message(
-            id: UUID(),
+        let msgClose = Message(
+            id: UUID().uuidString,
             kind: .close,
             userName: key,
             dispatchDate: Date(),
             message: .clear
         )
-        let msgConnectionString = try msgConnection.encodeMessage()
-        wsClients.forEach {
-            $0.ws.send(msgConnectionString)
+        sendMessageToExternalService(message: msgClose) { result in
+            switch result {
+            case .success:
+                Logger.log(kind: .info, message: "Сообщение успешно доставленно на сервис транспортного уровня")
+            case let .failure(error):
+                Logger.log(kind: .error, message: error.localizedDescription)
+            }
         }
     }
 }
@@ -147,7 +147,7 @@ private extension WebSocketController {
         let httpMessageWithString = try req.content.decode(HttpMessage.self)
         if let error = httpMessageWithString.error {
             let msg = Message(
-                id: UUID(),
+                id: UUID().uuidString,
                 kind: .error,
                 userName: .clear,
                 dispatchDate: Date(),
@@ -173,13 +173,8 @@ private extension WebSocketController {
 
         let messageData = try JSONDecoder().decode(HttpMessageData.self, from: objectString)
 
-        guard let uid = UUID(uuidString: messageData.uid) else {
-            throw Abort(.custom(code: HTTPResponseStatus.badRequest.code,
-                                reasonPhrase: "UUID не корректен"))
-        }
-
         let msg = Message(
-            id: uid,
+            id: messageData.uid,
             kind: messageData.messageKind,
             userName: messageData.userName,
             dispatchDate: Date(),
@@ -202,7 +197,7 @@ private extension WebSocketController {
     /// Send message from application layer to transport layer
     func sendMessageToExternalService(message: Message, completion: @escaping MKResultBlock<Bool, KingError>) {
         let messageData = HttpMessageData(
-            uid: message.id.uuidString,
+            uid: message.id,
             message: message.message,
             messageKind: message.kind,
             userName: message.userName
@@ -218,45 +213,49 @@ private extension WebSocketController {
         }
 
         // FIXME: Заменить на URL Влада
-//        let externalServiceURL = "http://127.0.0.1:8080/api/v1/message/proxy"
-        let externalServiceURL = "http://192.168.175.118:16000/send"
+        let externalServiceURL = "http://127.0.0.1:2929/api/v1/message/proxy"
+//        let externalServiceURL = "http://192.168.175.118:16000/send"
         APIManager.shared.post(urlString: externalServiceURL, msgData: msgData, completion: completion)
     }
     
     /// Ручка, имитирующая работу сервиса Влада на трансортном уровне.
-//    func proxyExternalService(_ req: Request) async throws -> String {
-//        let httpMessageData = try req.content.decode(HttpMessageData.self)
-//        Logger.log(message: "Имитация работы сервиса транспортного уровня. Полученно сообщение: \(httpMessageData)")
-//        let hasError = [false, true].randomElement()!
-//
-//        let httpMsg: HttpMessage
-//        // Формируем сообщение с ошибков
-//        if hasError {
-//            Logger.log(kind: .info, message: "Данные повреждены в фейковом сервисе")
-//            httpMsg = HttpMessage(data: nil, error: "Данные повреждены")
-//        } else {
-//            httpMsg = HttpMessage(
-//                data: .init(
-//                    uid: httpMessageData.uid,
-//                    message: httpMessageData.message,
-//                    userName: httpMessageData.userName
-//                ),
-//                error: nil
-//            )
-//        }
-//
-//        let encodedMsgData: Data = try JSONEncoder().encode(httpMsg)
-//        APIManager.shared.post(
-//            urlString: "http://127.0.0.1:8080/api/v1/message",
-//            msgData: encodedMsgData
-//        ) { result in
-//            switch result {
-//            case .success:
-//                Logger.log(message: "Успешно отправлены данные назад")
-//            case let .failure(error):
-//                Logger.log(kind: .error, message: error.localizedDescription)
-//            }
-//        }
-//        return "Закончил отправку"
-//    }
+    func proxyExternalService(_ req: Request) async throws -> String {
+        let httpMessageData = try req.content.decode(HttpMessageData.self)
+        Logger.log(message: "Имитация работы сервиса транспортного уровня. Полученно сообщение: \(httpMessageData)")
+        let hasError = [false, true].randomElement()!
+//        let hasError = [false].randomElement()!
+
+        let httpMsg: HttpMessage
+        // Формируем сообщение с ошибков
+        if hasError {
+            Logger.log(kind: .info, message: "Данные повреждены в фейковом сервисе")
+            httpMsg = HttpMessage(data: nil, error: "Данные повреждены")
+        } else {
+            let msgContent = HttpMessageData(
+                uid: httpMessageData.uid,
+                message: httpMessageData.message,
+                messageKind: httpMessageData.messageKind,
+                userName: httpMessageData.userName
+            )
+            let msgData = try JSONEncoder().encode(msgContent)
+            let msgString = String(data: msgData, encoding: .utf8)
+            httpMsg = HttpMessage(
+                data: msgString,
+                error: nil
+            )
+        }
+        let encodedMsgData: Data = try JSONEncoder().encode(httpMsg)
+        APIManager.shared.post(
+            urlString: "http://127.0.0.1:2929/api/v1/message",
+            msgData: encodedMsgData
+        ) { result in
+            switch result {
+            case .success:
+                Logger.log(message: "Успешно отправлены данные назад")
+            case let .failure(error):
+                Logger.log(kind: .error, message: error.localizedDescription)
+            }
+        }
+        return "Закончил отправку"
+    }
 }

@@ -13,7 +13,7 @@ struct MessageAbstract: Codable {
 }
 
 struct Message: Codable {
-    let id: UUID
+    let id: String
     let kind: MessageKind
     let userName: String
     let dispatchDate: Date
